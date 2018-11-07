@@ -29,16 +29,7 @@ check_slave_health () {
   return 0
 }
 
-
-echo Updating master connetion info in slave.
-
-mysql -u root -p$MYSQL_ROOT_PASSWORD -e "RESET MASTER; \
-  CHANGE MASTER TO \
-  MASTER_HOST='$MYSQL_MASTER_HOST', \
-  MASTER_PORT=$MYSQL_MASTER_PORT, \
-  MASTER_USER='$MYSQL_REPLICATION_USER', \
-  MASTER_PASSWORD='$MYSQL_REPLICATION_PASSWORD';"
-
+echo "Dump database from master"
 mysqldump \
   --protocol=tcp \
   --user=$MYSQL_REPLICATION_USER \
@@ -51,23 +42,40 @@ mysqldump \
   --master-data \
   --flush-logs \
   --flush-privileges \
-  | mysql -u root -p$MYSQL_ROOT_PASSWORD
+  > /tmp/db.sql
 
-echo mysqldump completed.
+echo "Detect binlog file and position in master."
+MYSQL01_Position=$(eval "mysql --host=$MYSQL_MASTER_HOST --port=$MYSQL_MASTER_PORT --user=$MYSQL_REPLICATION_USER --password=$MYSQL_REPLICATION_PASSWORD -e 'show master status \G' | grep Position | sed -n -e 's/^.*: //p'")
+MYSQL01_File=$(eval "mysql --host=$MYSQL_MASTER_HOST --port=$MYSQL_MASTER_PORT --user=$MYSQL_REPLICATION_USER --password=$MYSQL_REPLICATION_PASSWORD -e 'show master status \G'     | grep File     | sed -n -e 's/^.*: //p'")
 
-echo Starting slave ...
+echo "Import db dump in slave."
+cat /tmp/db.sql | mysql -u root -p$MYSQL_ROOT_PASSWORD
+
+rm -rf /tmp/db.sql
+
+echo "Updating master connection info in slave."
+mysql -u root -p$MYSQL_ROOT_PASSWORD -e "RESET MASTER; \
+  CHANGE MASTER TO \
+  MASTER_HOST='$MYSQL_MASTER_HOST', \
+  MASTER_PORT=$MYSQL_MASTER_PORT, \
+  MASTER_USER='$MYSQL_REPLICATION_USER', \
+  MASTER_PASSWORD='$MYSQL_REPLICATION_PASSWORD', \
+  MASTER_LOG_FILE='$MYSQL01_File', \
+  MASTER_LOG_POS=$MYSQL01_Position;"
+
+echo "Starting slave ..."
 mysql -u root -p$MYSQL_ROOT_PASSWORD -e "START SLAVE;"
 
-echo Initial health check:
+echo "Initial health check:"
 check_slave_health
 
-echo Waiting for health grace period and slave to be still healthy:
+echo "Waiting for health grace period and slave to be still healthy:"
 sleep $REPLICATION_HEALTH_GRACE_PERIOD
 
 counter=0
 while ! check_slave_health; do
   if (( counter >= $REPLICATION_HEALTH_TIMEOUT )); then
-    echo ERROR: Replication not healthy, health timeout reached, failing.
+    echo "ERROR: Replication not healthy, health timeout reached, failing."
 	break
     exit 1
   fi
