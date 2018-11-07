@@ -42,6 +42,7 @@ mysqldump \
   --master-data \
   --flush-logs \
   --flush-privileges \
+  --verbose \
   > /tmp/db.sql
 
 echo "Detect binlog file and position in master."
